@@ -7,67 +7,42 @@ Original file is located at
     https://colab.research.google.com/drive/11QanIChF977DWrQNq-CJ_0bshaMvQS3q
 """
 
-# 기본
+# 필수 라이브러리 import
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import missingno
+from sklearn.preprocessing import StandardScaler
+
+cp -r /content/drive/MyDrive/Colab\ Notebooks/final_project/data /content
+
+!sudo apt-get install -y fonts-nanum
+!sudo fc-cache -fv
+!rm ~/.cache/matplotlib -rf
+
+import matplotlib.pyplot as plt
+
+plt.rc('font', family='NanumBarunGothic')
+
+# # 한글 폰트 설정
+# !apt -qq -y install fonts-nanum > /dev/null
+
+# plt.rc('font', family='NanumGothic')
+# plt.rcParams['axes.unicode_minus'] = False
+# plt.rcParams['figure.figsize'] = 12, 6
+# plt.rcParams['font.size'] = 14
+
+# print("한글 폰트 설정 완료 - 런타임 > 다시 시작 후 계속 실행")
+
+# pyarrow 설치 (parquet 파일 읽기용)
+!pip install pyarrow
 
 # 경고 뜨지 않게 설정
 import warnings
 warnings.filterwarnings('ignore')
 
-# 그래프 설정
-sns.set()
-
-# 그래프 기본 설정
-plt.rcParams['font.family'] = 'Malgun Gothic'
-# plt.rcParams['font.family'] = 'AppleGothic'
-plt.rcParams['figure.figsize'] = 12, 6
-plt.rcParams['font.size'] = 14
-plt.rcParams['axes.unicode_minus'] = False
-
-# 결측치 시각화를 위한 라이브러리
-import missingno
-
-# 데이터 전처리 알고리즘
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
-
-# 학습용과 검증용으로 나누는 함수
-from sklearn.model_selection import train_test_split
-
-# 교차 검증
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import cross_validate
-from sklearn.model_selection import KFold
-from sklearn.model_selection import StratifiedKFold
-
-# 평가함수
-# 분류용
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import precision_score
-from sklearn.metrics import recall_score
-from sklearn.metrics import f1_score
-from sklearn.metrics import roc_auc_score
-
-# 회귀용
-from sklearn.metrics import r2_score
-from sklearn.metrics import mean_squared_error
-
-# 모델의 최적의 하이퍼 파라미터를 찾기 위한 도구
-from sklearn.model_selection import GridSearchCV
-
-import gc
-
-!pip install pyarrow  # 먼저 pyarrow 설치
-
-from google.colab import files
-uploaded = files.upload()
-
-
-
-# 파일명 리스트 (업로드한 실제 파일명과 일치시켜야 함)
+# 데이터 로드: 6개월 청구정보 parquet 파일 병합
 file_list = [
     '201807_train_청구정보.parquet',
     '201808_train_청구정보.parquet',
@@ -77,31 +52,79 @@ file_list = [
     '201812_train_청구정보.parquet'
 ]
 
-# 각 파일을 읽어서 하나의 데이터프레임으로 결합
 df_all = pd.concat([pd.read_parquet(f) for f in file_list], ignore_index=True)
+print("병합 완료: ", df_all.shape)
 
-print("합친 후 데이터 크기:", df_all.shape)
+# 결측치 처리
+missing_cols = df_all.columns[df_all.isnull().any()]
+missing_cols
 
-# 예시: 제거하고 싶은 컬럼 리스트 (원하는 대로 수정)
+# 불필요한 컬럼 제거
 cols_to_drop = ['대표결제방법코드', '청구서발송여부_R3M', '청구금액_R3M', '포인트_마일리지_환산_B0M']
+df_all.drop(columns=cols_to_drop, inplace=True, errors='ignore')
+print("컬럼 제거 완료")
 
-# 삭제
-df_all.drop(columns=cols_to_drop, inplace=True)
+# Segment 컬럼 가져오기
+# parquet 파일 열기
+df01 = pd.read_parquet("/content/data/train/1.회원정보/201807_train_회원정보.parquet")
 
-# 확인
-print("삭제 후 컬럼 목록:", df_all.columns.tolist())
+df_all = df_all.merge(df01[['ID', 'Segment']], on='ID', how='left')
+df_all
+
+# 데이터 개요 확인
+df_all.info()
+
+# 결측치 아니지만 값이 '미확인'
+df_all['대표청구지고객주소구분코드'].unique()
+
+df_all['대표청구지고객주소구분코드'].value_counts()
+
+pivot_count = pd.crosstab(df_all['Segment'], df_all['대표청구지고객주소구분코드'])
+pivot_count
+
+#  대표청구지고객주소구분코드별 세그먼트(cluster) 분포 비율 확인 (행 기준 정규화)
+cross_tab = pd.crosstab(df_all['대표청구지고객주소구분코드'], df_all['Segment'], normalize='index') * 100
+
+#  시각화
+plt.figure(figsize=(8, 5))
+sns.heatmap(cross_tab, annot=True, fmt='.1f', cmap='YlGnBu')
+plt.title("대표청구지고객주소구분코드별 세그먼트 분포 (%)")
+plt.xlabel("세그먼트")
+plt.ylabel("대표청구지고객주소구분코드")
+plt.show()
+
+# sns.countplot(data=df_all, x='대표청구지고객주소구분코드')
+# plt.title("대표청구지고객주소구분코드 분포")
+# plt.show()
+
+# '대표청구지고객주소구분코드' 컬럼 제거
+df_all.drop(columns=['대표청구지고객주소구분코드'], inplace=True, errors='ignore')
+
+# 클러스터별 평균값 (수치형만 보기 좋게 요약)
+cluster_summary = df_all.groupby('Segment').mean(numeric_only=True).round(2)
+cluster_summary.T  # 전치로 보기 편하게
+
+# ls
+
+# # 한글이 깨지지 않도록 utf-8-sig 인코딩 적용
+# df_all.to_csv('df_all_final.csv', index=False, encoding='utf-8-sig')
+
+# from google.colab import files
+# files.download('df_all_final.csv')
+
+# CSV 파일 불러오기
+df = pd.read_csv('df_all.csv', encoding='cp949') # 경로는 필요 시 수정
+
+# Parquet 파일로 저장
+df.to_parquet('df_all.parquet', index=False)
+
+
+
+
 
 # df_all.info()
 # df_all.describe()
 # df_all.isnull().sum()
-# ID 기준으로 고객별 평균, 합계, 표준편차 등 집계
-df_grouped = df_all.groupby('ID').agg(['mean', 'sum', 'std']).reset_index()
-
-# 다중 컬럼 정리
-df_grouped.columns = ['_'.join(col).strip() if col[1] else col[0] for col in df_grouped.columns.values]
-
-# 확인
-df_grouped.head()
 
 # # 이상치 확인
 # def detect_outliers_iqr(df, column):
@@ -125,165 +148,132 @@ df_grouped.head()
 #     outliers = detect_outliers_iqr(df_all, col)
 #     outlier_results[col] = outliers
 
-# import seaborn as sns
-# import matplotlib.pyplot as plt
+# # 데이터 샘플 추출
+# # 1. (선택) 데이터 샘플링: df_all에서 500개 샘플 추출
+# df_all_sample = df_all.sample(n=500, random_state=42)  # 또는 head(n)
 
-# plt.figure(figsize=(15, 8))
-# for i, col in enumerate(target_columns):
-#     plt.subplot(2, 3, i+1)
-#     sns.boxplot(x=df_all[col])
-#     plt.title(col)
-# plt.tight_layout()
-# plt.show()
+# # 2. CSV 파일로 저장 (인코딩은 Excel 호환 위해 cp949 사용)
+# df_all_sample.to_csv('df_all_sample.csv', index=False, encoding='cp949')
 
-df_all.shape
-# df_all.columns.tolist()
-# df_all.dtypes
-# df_all.head()
+# # 3. 로컬로 다운로드
+# from google.colab import files
+# files.download('df_all_sample.csv')
 
-df_all.to_csv('df_all.csv', index=False, encoding='cp949')
+# # 1. 컬럼명 확인
+# print(df_all_sample.columns.tolist())
 
-import os
-os.listdir()
+# # 2. 데이터 미리보기
+# print(df_all_sample.head(3))
 
-from google.colab import files
-files.download('df_all.csv')
-
-# 결측치 확인
-df_all.isna().sum()
-
-# 데이터 샘플 추출
-# 1. (선택) 데이터 샘플링: df_all에서 500개 샘플 추출
-df_all_sample = df_all.sample(n=500, random_state=42)  # 또는 head(n)
-
-# 2. CSV 파일로 저장 (인코딩은 Excel 호환 위해 cp949 사용)
-df_all_sample.to_csv('df_all_sample.csv', index=False, encoding='cp949')
-
-# 3. 로컬로 다운로드
-from google.colab import files
-files.download('df_all_sample.csv')
-
-# 1. 컬럼명 확인
-print(df_all_sample.columns.tolist())
-
-# 2. 데이터 미리보기
-print(df_all_sample.head(3))
+# 변수 간 상관관계 확인
 
 # 수치형 변수만 선택
 num_df = df_all.select_dtypes(include='number')
 
-# 상관계수
+# 상관계수 히트맵
 plt.figure(figsize=(14, 10))
 sns.heatmap(num_df.corr(), annot=False, cmap='coolwarm')
 plt.title("수치형 변수 간 상관관계 Heatmap")
 plt.show()
 
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# 수치형 컬럼만 추출 (ID, segment 제외)
+features = df_all.select_dtypes(include='number').drop(columns=['ID'], errors='ignore')
+
+# 스케일링
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(features)
+
+# PCA 2차원 축소
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+# PCA 결과를 데이터프레임으로 저장
+df_pca = pd.DataFrame(X_pca, columns=['PC1', 'PC2'])
+df_pca['Segment'] = df_all['Segment'].values
+
+# 시각화
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=df_pca, x='PC1', y='PC2', hue='Segment', palette='Set2', alpha=0.7)
+plt.title("PCA 기반 Segment 분포 (2차원 축소)")
+plt.xlabel("주성분 1 (PC1)")
+plt.ylabel("주성분 2 (PC2)")
+plt.legend(title='Segment')
+plt.grid(True)
+plt.show()
+
+# from statsmodels.stats.outliers_influence import variance_inflation_factor
+# from statsmodels.tools.tools import add_constant
+
+# def calculate_vif(X):
+#     X = add_constant(X)  # 상수항 추가 (intercept)
+#     vif_data = pd.DataFrame()
+#     vif_data["feature"] = X.columns
+#     vif_data["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+#     return vif_data
+
+# # 수치형 데이터만 다중공선성(VIF)계산
+# numeric_cols = df_all.select_dtypes(include='number')
+# vif_result = calculate_vif(numeric_cols)
+# print(vif_result)
+
+# 수치형 변수만 선택
+num_cols = df_all.select_dtypes(include='number').drop(columns=['ID'], errors='ignore').columns
+
+# Segment를 숫자로 인코딩
+from sklearn.preprocessing import LabelEncoder
+le = LabelEncoder()
+df_all['Segment_code'] = le.fit_transform(df_all['Segment'])
+
+# 상관계수 계산 (Segment vs 각 수치형 변수)
+correlations = df_all[num_cols].corrwith(df_all['Segment_code']).sort_values(key=abs, ascending=False)
+
+# 상관계수 시각화
+correlations.plot(kind='barh', figsize=(10, 8))
+plt.title('Segment와 수치형 변수 간 상관관계')
+plt.axvline(x=0, color='gray', linestyle='--')
+plt.show()
+
+from scipy.stats import chi2_contingency
+
+chi2_results = []
+
+for col in cat_cols:
+    ct = pd.crosstab(df_all[col], df_all['Segment'])
+    try:
+        chi2, p, dof, _ = chi2_contingency(ct)
+        chi2_results.append({'변수': col, '카이제곱값': chi2, 'p-value': p})
+    except:
+        pass  # 희소표일 경우 오류 발생 → 무시
+
+chi2_df = pd.DataFrame(chi2_results).sort_values(by='p-value')
+chi2_df.head()
 
 
 
+# # parquet 파일 열기
+# df1 = pd.read_parquet("201807_train_청구정보.parquet")
 
+# # csv로 저장
+# df1.to_csv("201807_train_청구정보.csv", index=False)
 
+# # parquet 파일 열고 csv로 저장
+# df2 = pd.read_parquet("201807_train_청구정보.parquet")
+# df2.to_csv("201807_train_청구정보.csv", index=False)
 
-# 수치형 데이터만 다중공선성(VIF)계산
-numeric_cols = df.select_dtypes(include='number')
-vif_result = calculate_vif(numeric_cols)
-print(vif_result)
+# df3 = pd.read_parquet("201807_train_청구정보.parquet")
+# df3.to_csv("201807_train_청구정보.csv", index=False)
 
+# df4 = pd.read_parquet("201807_train_청구정보.parquet")
+# df4.to_csv("201807_train_청구정보.csv", index=False)
 
+# df5 = pd.read_parquet("201807_train_청구정보.parquet")
+# df5.to_csv("201807_train_청구정보.csv", index=False)
 
-
-
-
-
-# read parquet
-df1 = pd.read_parquet('201807_train_청구정보.parquet')
-df1.head()
-
-df2 = pd.read_parquet('201808_train_청구정보.parquet')
-df3 = pd.read_parquet('201809_train_청구정보.parquet')
-df4 = pd.read_parquet('201810_train_청구정보.parquet')
-df5 = pd.read_parquet('201811_train_청구정보.parquet')
-df6 = pd.read_parquet('201812_train_청구정보.parquet')
-
-# print('201807_train_청구정보.parquet')
-# df1.isnull().sum()
-
-# print('201808_train_청구정보.parquet')
-# df2.isnull().sum()
-
-# print('201809_train_청구정보.parquet')
-# df3.isnull().sum()
-
-# print('201810_train_청구정보.parquet')
-# df4.isnull().sum()
-
-# print('201811_train_청구정보.parquet')
-# df5.isnull().sum()
-
-# print('201812_train_청구정보.parquet')
-# df6.isnull().sum()
-
-print('201807_train_청구정보.parquet')
-df1.info()
-# print('201808_train_청구정보.parquet')
-# df2.info()
-# print('201809_train_청구정보.parquet')
-# df3.info()
-# print('201810_train_청구정보.parquet')
-# df4.info()
-# print('201811_train_청구정보.parquet')
-# df5.info()
-# print('201812_train_청구정보.parquet')
-# df6.info()
-
-df1.columns.tolist()
-
-# 컬럼 제거
-df11 = df1.drop(columns=['대표결제방법코드', '청구서발송여부_R3M', '청구금액_R3M', '포인트_마일리지_환산_B0M'], inplace=False)
-print(df11.shape)
-print(df11.head())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# parquet 파일 열기
-df1 = pd.read_parquet("201807_train_청구정보.parquet")
-
-# csv로 저장
-df1.to_csv("201807_train_청구정보.csv", index=False)
-
-# parquet 파일 열고 csv로 저장
-df2 = pd.read_parquet("201807_train_청구정보.parquet")
-df2.to_csv("201807_train_청구정보.csv", index=False)
-
-df3 = pd.read_parquet("201807_train_청구정보.parquet")
-df3.to_csv("201807_train_청구정보.csv", index=False)
-
-df4 = pd.read_parquet("201807_train_청구정보.parquet")
-df4.to_csv("201807_train_청구정보.csv", index=False)
-
-df5 = pd.read_parquet("201807_train_청구정보.parquet")
-df5.to_csv("201807_train_청구정보.csv", index=False)
-
-df6 = pd.read_parquet("201807_train_청구정보.parquet")
-df6.to_csv("201807_train_청구정보.csv", index=False)
+# df6 = pd.read_parquet("201807_train_청구정보.parquet")
+# df6.to_csv("201807_train_청구정보.csv", index=False)
 
