@@ -42,4 +42,5 @@ Thumbs.db
 # 빈 폴더 유지 파일
 # ==========================
 !.gitkeep
-data/
+data/test/
+data/train/
